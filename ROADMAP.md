@@ -93,6 +93,29 @@
 
 ---
 
+---
+
+## v1.1 — 流式结果 + ADI 成员过滤导出
+
+**目标**：长查询不再让人干等；ADI 输入时能一键导出"只剩会员"的 ADI。
+**完成定义**：
+- 用 QRZ 拉一大段（>50 条日本呼号），结果在第一批查完后就开始出现在表格里
+- 上传含若干会员/非会员的 ADI，点"Export members-only ADI"，下载的 .adi 在 Cloudlog/Log4OM 里能正常导入，会员 QSO 数 = 表里 yes 数
+
+- [ ] `JarlClient.query_iter(callsigns)`：async generator，逐批 yield `list[JarlResult]`
+- [ ] `app/adi_parser.py` 加 `extract_records(data)` → `(header, [(record_text, callsign)])`，字节保留
+- [ ] `app/adi_parser.py` 加 `filter_records(data, keep_callsign_set)` → bytes
+- [ ] FastAPI `POST /search.stream` → `StreamingResponse(application/x-ndjson)`，事件：
+      `{event:'start', queryable, skipped}` → `{event:'result', ...}` × N → `{event:'done'}`
+- [ ] FastAPI `POST /export.adi` → 重跑 search，提取 yes 集合，调用 `filter_records`，返回过滤 ADI
+- [ ] 前端：用 fetch + `body.getReader()` 流式读 NDJSON，append 行；提交后保留 file input，
+      搜索完成后显示"Export members-only ADI"按钮（仅当上传了 ADI 时）
+- [ ] 旧 `/search` HTML POST 端点保留（无 JS 回退）
+- [ ] 单测：filter_records 字节保留、CALL 大小写、portable 后缀
+- [ ] verify.py 第 4 步：filter 一个含 JA1RL+W1AW 的 ADI，校验只剩 JA1RL 那条
+
+---
+
 ## 备选 / 后续考虑（v1.x+）
 
 仅记录，不承诺。任何启动前先和用户对齐，更新 Charter §3 / §4。

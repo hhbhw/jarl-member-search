@@ -4,6 +4,7 @@ Runs three checks and prints PASS/FAIL for each:
   1. Positive: known JARL members are reported as 'yes'
   2. Negative: non-Japanese and malformed callsigns are filtered out
   3. End-to-end: parse the test ADI fixture, classify, query JARL, export CSV
+  4. ADI filter: filter the test ADI to members only (Charter §3.1 #10)
 
 Usage:  python scripts/verify.py
 Exit code is non-zero if any check fails — suitable for CI or pre-release gate.
@@ -19,8 +20,8 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT))
 
-from app.adi_parser import extract_unique_callsigns  # noqa: E402
-from app.callsign_filter import partition  # noqa: E402
+from app.adi_parser import extract_records, extract_unique_callsigns, filter_records  # noqa: E402
+from app.callsign_filter import normalize, partition  # noqa: E402
 from app.jarl_client import JarlClient  # noqa: E402
 
 
@@ -100,8 +101,39 @@ async def check_e2e() -> bool:
     return ok
 
 
+async def check_adi_filter() -> bool:
+    fixture = ROOT / "tests" / "fixtures" / "sample.adi"
+    print(f"[4/4] ADI filter: filtering {fixture.name} by JARL members...")
+    data = fixture.read_bytes()
+    cs = extract_unique_callsigns(data)
+    queryable, _ = partition(cs)
+    async with JarlClient(rate_limit_seconds=0.5) as client:
+        results = await client.query([q.normalized for q in queryable])
+    members = {r.callsign for r in results if r.is_member == "yes"}
+    filtered = filter_records(data, members, normalize)
+    _, kept = extract_records(filtered)
+
+    kept_calls = [c for _, c in kept]
+    expected = "JA1RL"
+    ok = True
+    if expected not in kept_calls:
+        print(f"    FAIL  expected {expected} in filtered ADI, got {kept_calls}")
+        ok = False
+    bad_calls = [c for c in kept_calls if normalize(c) not in members]
+    if bad_calls:
+        print(f"    FAIL  non-member records leaked through: {bad_calls}")
+        ok = False
+    # Check field preservation — pick any kept record, must still have QSO_DATE.
+    if kept and "<qso_date" not in kept[0][0].lower():
+        print(f"    FAIL  QSO_DATE field missing from kept record: {kept[0][0]!r}")
+        ok = False
+    if ok:
+        print(f"    PASS  kept {len(kept_calls)} records {kept_calls}, all members, QSO fields preserved")
+    return ok
+
+
 async def main() -> int:
-    results = [await check_positive(), check_negative(), await check_e2e()]
+    results = [await check_positive(), check_negative(), await check_e2e(), await check_adi_filter()]
     print()
     if all(results):
         print("ALL CHECKS PASS")

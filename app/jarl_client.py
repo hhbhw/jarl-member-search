@@ -12,7 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
-from typing import Iterable
+from typing import AsyncIterator, Iterable
 
 import httpx
 from bs4 import BeautifulSoup
@@ -175,34 +175,43 @@ class JarlClient:
             out.append(JarlResult(callsign=cs, is_member=status, qsl_via=via, raw_result=raw))
         return out
 
-    async def query(self, callsigns: Iterable[str]) -> list[JarlResult]:
-        """Query JARL for membership status of multiple callsigns.
+    def _unique_uppered(self, callsigns: Iterable[str]) -> list[str]:
+        seen: set[str] = set()
+        unique: list[str] = []
+        for cs in callsigns:
+            if not cs or not cs.strip():
+                continue
+            up = cs.strip().upper()
+            if up not in seen:
+                seen.add(up)
+                unique.append(up)
+        return unique
 
-        Batches into groups of BATCH_SIZE, sleeps `rate_limit_seconds` between
-        batches, and retries each batch up to `max_retries` times with
-        exponential backoff.
+    async def query(self, callsigns: Iterable[str]) -> list[JarlResult]:
+        """Collect all batches into one list (convenience for non-streaming callers)."""
+        all_results: list[JarlResult] = []
+        async for batch in self.query_iter(callsigns):
+            all_results.extend(batch)
+        return all_results
+
+    async def query_iter(self, callsigns: Iterable[str]) -> AsyncIterator[list[JarlResult]]:
+        """Async-generator variant of :meth:`query`.
+
+        Yields ``list[JarlResult]`` one batch at a time. Same batching,
+        rate-limit, and retry behavior as :meth:`query`; the difference is
+        that callers can stream results to the UI as each batch lands
+        instead of waiting for the whole job.
         """
         if self._client is None:
             raise RuntimeError("Use 'async with JarlClient() as c:'")
 
-        cs_list = [c.strip().upper() for c in callsigns if c and c.strip()]
-        # Deduplicate while preserving order.
-        seen: set[str] = set()
-        unique: list[str] = []
-        for cs in cs_list:
-            if cs not in seen:
-                seen.add(cs)
-                unique.append(cs)
-
-        all_results: list[JarlResult] = []
+        unique = self._unique_uppered(callsigns)
         async with self._lock:
             for i in range(0, len(unique), BATCH_SIZE):
                 batch = unique[i : i + BATCH_SIZE]
                 if i > 0:
                     await asyncio.sleep(self.rate_limit_seconds)
-                batch_results = await self._post_batch_with_retry(batch)
-                all_results.extend(batch_results)
-        return all_results
+                yield await self._post_batch_with_retry(batch)
 
     async def _post_batch_with_retry(self, batch: list[str]) -> list[JarlResult]:
         delay = 1.0

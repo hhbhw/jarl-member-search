@@ -9,6 +9,9 @@
     textarea { width: 100%; min-height: 8em; font-family: monospace; font-size: 14px; padding: 8px; box-sizing: border-box; }
     button { background: #2c7; color: white; border: 0; padding: 8px 16px; font-size: 14px; cursor: pointer; border-radius: 4px; }
     button:hover { background: #1a6; }
+    button.secondary { background: #888; }
+    button.secondary:hover { background: #666; }
+    button:disabled { background: #ccc; cursor: not-allowed; }
     table { width: 100%; border-collapse: collapse; margin-top: 1em; }
     th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 14px; }
     th { background: #f4f4f4; }
@@ -16,21 +19,25 @@
     .no { color: #888; }
     .unknown { color: #c60; background: #fff7e0; font-weight: bold; }
     .summary { background: #f8f8f8; padding: 10px; border-radius: 4px; margin: 1em 0; font-size: 14px; }
+    .summary .live { color: #1a6; }
     .note { color: #666; font-size: 12px; }
+    progress { width: 280px; vertical-align: middle; }
+    .err { color: #c00; background: #fee; padding: 8px; border-radius: 4px; }
+    fieldset { border: 1px solid #ddd; padding: 10px; margin: 8px 0; }
   </style>
 </head>
 <body>
   <h1>JARL 会員検索 / Member Search</h1>
-  <p class="note">入力されたコールサインから日本局を判定し、JARL 公式検索に問い合わせます。1 回のリクエストで最大 20 局まとめて送信します。</p>
+  <p class="note">入力されたコールサインから日本局を判定し、JARL 公式検索に問い合わせます。20 局/リクエストで送信、1 req/s 制限、結果は届き次第ライブで表示されます。</p>
 
-  <form method="post" action="/search" enctype="multipart/form-data" id="searchForm">
+  <form id="searchForm" enctype="multipart/form-data">
     <label for="callsigns">Callsigns (one per line or comma-separated)</label>
-    <textarea id="callsigns" name="callsigns" placeholder="JA1RL&#10;JE1ABC&#10;...">{{ submitted or "" }}</textarea>
+    <textarea id="callsigns" name="callsigns" placeholder="JA1RL&#10;JE1ABC&#10;..."></textarea>
     <p>
       <label for="adi_file">Or upload ADI/ADIF file:</label>
       <input type="file" id="adi_file" name="adi_file" accept=".adi,.adif" />
     </p>
-    <fieldset style="border:1px solid #ddd; padding:10px;">
+    <fieldset>
       <legend>Or pull from QRZ Logbook</legend>
       <p>
         <label for="qrz_key">QRZ API key:</label>
@@ -43,101 +50,232 @@
       </p>
     </fieldset>
     <p>
-      <button type="submit">Search JARL</button>
-      <button type="submit" formaction="/export.csv">Download CSV</button>
+      <button type="submit" id="searchBtn">Search JARL (live)</button>
+      <button type="button" id="csvBtn" class="secondary">Download CSV</button>
+      <button type="button" id="adiBtn" class="secondary" disabled title="Upload an ADI file first">Export members-only ADI</button>
+      <button type="button" id="cancelBtn" class="secondary" disabled>Cancel</button>
     </p>
   </form>
 
-  {% if qrz_error %}
-    <p style="color:#c00; background:#fee; padding:8px; border-radius:4px;">{{ qrz_error }}</p>
-  {% endif %}
+  <div id="err" class="err" style="display:none"></div>
 
-  {% if summary %}
-    <div class="summary">
-      Input <strong>{{ summary.total_input }}</strong> &middot;
-      From cache <strong>{{ summary.from_cache }}</strong> &middot;
-      Hit JARL <strong>{{ summary.from_jarl }}</strong> &middot;
-      Skipped non-JP <strong>{{ summary.skipped }}</strong> &middot;
-      Members <strong class="yes">{{ summary.members }}</strong> &middot;
-      Non-members <strong>{{ summary.non_members }}</strong> &middot;
-      Unknown <strong class="unknown">{{ summary.unknown }}</strong>
-    </div>
-  {% endif %}
+  <div id="summary" class="summary" style="display:none">
+    Input <strong id="sInput">0</strong> &middot;
+    Skipped non-JP <strong id="sSkipped">0</strong> &middot;
+    From cache <strong id="sCache">0</strong> &middot;
+    JARL planned <strong id="sPlan">0</strong>
+    &nbsp; <progress id="prog" max="100" value="0"></progress>
+    <span class="live">Members <strong id="sYes">0</strong> &middot; Non <strong id="sNo">0</strong> &middot; Unknown <strong id="sUnk">0</strong></span>
+  </div>
 
-  {% if skipped %}
-  <details>
-    <summary>Skipped (non-Japanese or malformed): {{ skipped|length }}</summary>
-    <table>
-      <thead><tr><th>Callsign</th><th>Reason</th></tr></thead>
-      <tbody>
-        {% for s in skipped %}
-        <tr><td><code>{{ s.original }}</code></td><td>{{ s.reason }}</td></tr>
-        {% endfor %}
-      </tbody>
-    </table>
-  </details>
-  {% endif %}
-
-  {% if results %}
-  <div style="margin: 8px 0;">
+  <div id="filterBar" style="display:none; margin:8px 0;">
     Filter:
     <button type="button" data-filter="all">All</button>
     <button type="button" data-filter="yes">Members only</button>
     <button type="button" data-filter="no">Non-members</button>
     <button type="button" data-filter="unknown">Unknown only</button>
   </div>
-  <table id="resultsTable">
+
+  <table id="resultsTable" style="display:none">
     <thead>
       <tr>
-        <th data-sort="callsign" style="cursor:pointer;">Callsign ▲▼</th>
-        <th data-sort="is_member" style="cursor:pointer;">Member? ▲▼</th>
-        <th data-sort="qsl_via" style="cursor:pointer;">QSL via ▲▼</th>
+        <th data-sort="0" style="cursor:pointer;">Callsign ▲▼</th>
+        <th data-sort="1" style="cursor:pointer;">Member? ▲▼</th>
+        <th data-sort="2" style="cursor:pointer;">QSL via ▲▼</th>
         <th>Raw</th>
+        <th>Source</th>
       </tr>
     </thead>
-    <tbody>
-      {% for r in results %}
-      <tr data-status="{{ r.is_member }}">
-        <td><code>{{ r.callsign }}</code></td>
-        <td class="{{ r.is_member }}">{{ r.is_member }}</td>
-        <td>{{ r.qsl_via }}</td>
-        <td><small>{{ r.raw_result }}</small></td>
-      </tr>
-      {% endfor %}
-    </tbody>
+    <tbody id="resultsBody"></tbody>
   </table>
-  <p class="note">⚠️ <code>unknown</code> means JARL did not return a parseable result — check manually at <a href="https://www.jarl.com/Page/Search/MemberSearch.aspx?Language=Jp" target="_blank">jarl.com</a>.</p>
-  <script>
-    (function() {
-      var table = document.getElementById('resultsTable');
-      var rows = Array.prototype.slice.call(table.tBodies[0].rows);
 
-      document.querySelectorAll('button[data-filter]').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-          var f = btn.getAttribute('data-filter');
-          rows.forEach(function(tr) {
-            tr.style.display = (f === 'all' || tr.dataset.status === f) ? '' : 'none';
-          });
-        });
-      });
+  <p id="unknownNote" class="note" style="display:none">⚠️ <code>unknown</code> means JARL did not return a parseable result — check manually at <a href="https://www.jarl.com/Page/Search/MemberSearch.aspx?Language=Jp" target="_blank">jarl.com</a>.</p>
 
-      var sortAsc = {};
-      table.querySelectorAll('th[data-sort]').forEach(function(th, colIdx) {
-        th.addEventListener('click', function() {
-          var key = th.getAttribute('data-sort');
-          sortAsc[key] = !sortAsc[key];
-          var dir = sortAsc[key] ? 1 : -1;
-          rows.sort(function(a, b) {
-            var av = a.cells[colIdx].innerText.trim();
-            var bv = b.cells[colIdx].innerText.trim();
-            return av < bv ? -dir : av > bv ? dir : 0;
-          });
-          var tb = table.tBodies[0];
-          rows.forEach(function(tr) { tb.appendChild(tr); });
-        });
+<script>
+  const form = document.getElementById('searchForm');
+  const fileInput = document.getElementById('adi_file');
+  const searchBtn = document.getElementById('searchBtn');
+  const csvBtn = document.getElementById('csvBtn');
+  const adiBtn = document.getElementById('adiBtn');
+  const cancelBtn = document.getElementById('cancelBtn');
+  const errBox = document.getElementById('err');
+  const summary = document.getElementById('summary');
+  const filterBar = document.getElementById('filterBar');
+  const table = document.getElementById('resultsTable');
+  const tbody = document.getElementById('resultsBody');
+  const unknownNote = document.getElementById('unknownNote');
+  const prog = document.getElementById('prog');
+
+  let counts = { yes: 0, no: 0, unknown: 0 };
+  let plannedJarl = 0;
+  let doneJarl = 0;
+  let activeCtrl = null;
+
+  function setEl(id, v) { document.getElementById(id).textContent = v; }
+  function showErr(msg) { errBox.textContent = msg; errBox.style.display = 'block'; }
+  function clearErr() { errBox.style.display = 'none'; errBox.textContent = ''; }
+
+  function reset() {
+    clearErr();
+    tbody.innerHTML = '';
+    counts = { yes: 0, no: 0, unknown: 0 };
+    plannedJarl = 0;
+    doneJarl = 0;
+    prog.value = 0;
+    setEl('sYes', 0); setEl('sNo', 0); setEl('sUnk', 0);
+    setEl('sInput', 0); setEl('sSkipped', 0); setEl('sCache', 0); setEl('sPlan', 0);
+    summary.style.display = 'none';
+    filterBar.style.display = 'none';
+    table.style.display = 'none';
+    unknownNote.style.display = 'none';
+  }
+
+  function appendResult(r) {
+    const tr = document.createElement('tr');
+    tr.dataset.status = r.is_member;
+    tr.innerHTML = `
+      <td><code>${r.callsign}</code></td>
+      <td class="${r.is_member}">${r.is_member}</td>
+      <td>${r.qsl_via || ''}</td>
+      <td><small>${(r.raw_result || '').replace(/</g,'&lt;')}</small></td>
+      <td><small>${r.source || ''}</small></td>`;
+    tbody.appendChild(tr);
+    counts[r.is_member] = (counts[r.is_member] || 0) + 1;
+    setEl('sYes', counts.yes);
+    setEl('sNo', counts.no);
+    setEl('sUnk', counts.unknown);
+    if (counts.unknown > 0) unknownNote.style.display = 'block';
+  }
+
+  function applyStart(ev) {
+    setEl('sInput', ev.total_input);
+    setEl('sSkipped', ev.skipped.length);
+    setEl('sCache', ev.from_cache);
+    setEl('sPlan', ev.from_jarl_planned);
+    plannedJarl = ev.from_jarl_planned;
+    summary.style.display = 'block';
+    filterBar.style.display = 'block';
+    table.style.display = 'table';
+  }
+
+  async function runStream() {
+    reset();
+    searchBtn.disabled = true;
+    cancelBtn.disabled = false;
+    adiBtn.disabled = true;
+
+    activeCtrl = new AbortController();
+    const data = new FormData(form);
+    try {
+      const resp = await fetch('/search.stream', {
+        method: 'POST', body: data, signal: activeCtrl.signal,
       });
-    })();
-  </script>
-  {% endif %}
+      if (!resp.ok) {
+        showErr('HTTP ' + resp.status);
+        return;
+      }
+      const reader = resp.body.getReader();
+      const dec = new TextDecoder();
+      let buf = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        buf += dec.decode(value, { stream: true });
+        let nl;
+        while ((nl = buf.indexOf('\n')) >= 0) {
+          const line = buf.slice(0, nl).trim();
+          buf = buf.slice(nl + 1);
+          if (!line) continue;
+          let ev;
+          try { ev = JSON.parse(line); } catch (e) { continue; }
+          if (ev.event === 'start') applyStart(ev);
+          else if (ev.event === 'result') appendResult(ev);
+          else if (ev.event === 'progress') {
+            doneJarl = ev.done;
+            prog.value = plannedJarl ? Math.floor(100 * doneJarl / plannedJarl) : 100;
+          } else if (ev.event === 'error') showErr(ev.message);
+          else if (ev.event === 'done') prog.value = 100;
+        }
+      }
+    } catch (e) {
+      if (e.name !== 'AbortError') showErr(String(e));
+    } finally {
+      activeCtrl = null;
+      searchBtn.disabled = false;
+      cancelBtn.disabled = true;
+      // Enable ADI export only if a file is present (still in the input).
+      adiBtn.disabled = !(fileInput.files && fileInput.files.length > 0);
+    }
+  }
+
+  form.addEventListener('submit', function(e) {
+    e.preventDefault();
+    runStream();
+  });
+
+  cancelBtn.addEventListener('click', function() {
+    if (activeCtrl) activeCtrl.abort();
+  });
+
+  function postDownload(action) {
+    const data = new FormData(form);
+    const f = document.createElement('form');
+    f.method = 'post';
+    f.action = action;
+    f.enctype = 'multipart/form-data';
+    f.style.display = 'none';
+    // We can't easily move files via hidden form, so use fetch + blob.
+    fetch(action, { method: 'POST', body: data }).then(async (resp) => {
+      if (!resp.ok) {
+        const t = await resp.text();
+        showErr('Download failed: ' + t);
+        return;
+      }
+      const blob = await resp.blob();
+      const cd = resp.headers.get('Content-Disposition') || '';
+      const m = cd.match(/filename="?([^"]+)"?/);
+      const fname = m ? m[1] : (action.startsWith('/export.csv') ? 'jarl_results.csv' : 'jarl_members_only.adi');
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url; a.download = fname; document.body.appendChild(a); a.click(); a.remove();
+      URL.revokeObjectURL(url);
+    }).catch((e) => showErr(String(e)));
+  }
+
+  csvBtn.addEventListener('click', () => postDownload('/export.csv'));
+  adiBtn.addEventListener('click', () => postDownload('/export.adi'));
+
+  fileInput.addEventListener('change', function() {
+    adiBtn.disabled = !(fileInput.files && fileInput.files.length > 0);
+    adiBtn.title = adiBtn.disabled ? 'Upload an ADI file first' : 'Filter the uploaded ADI to JARL members only';
+  });
+
+  // Filter buttons.
+  filterBar.querySelectorAll('button[data-filter]').forEach(function(btn) {
+    btn.addEventListener('click', function() {
+      const f = btn.getAttribute('data-filter');
+      tbody.querySelectorAll('tr').forEach(function(tr) {
+        tr.style.display = (f === 'all' || tr.dataset.status === f) ? '' : 'none';
+      });
+    });
+  });
+
+  // Click-to-sort headers.
+  const sortAsc = {};
+  table.querySelectorAll('th[data-sort]').forEach(function(th) {
+    th.addEventListener('click', function() {
+      const col = parseInt(th.getAttribute('data-sort'), 10);
+      sortAsc[col] = !sortAsc[col];
+      const dir = sortAsc[col] ? 1 : -1;
+      const rows = Array.prototype.slice.call(tbody.rows);
+      rows.sort(function(a, b) {
+        const av = a.cells[col].innerText.trim();
+        const bv = b.cells[col].innerText.trim();
+        return av < bv ? -dir : av > bv ? dir : 0;
+      });
+      rows.forEach(function(tr) { tbody.appendChild(tr); });
+    });
+  });
+</script>
 </body>
 </html>

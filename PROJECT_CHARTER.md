@@ -51,7 +51,9 @@
    - 表结构至少包含：`callsign, is_member, name, qth, queried_at, raw_html_or_json`
    - 查询前先看缓存，命中则跳过
    - 缓存有效期：默认 30 天（可在配置里改）
-6. **实时进度展示**：Web UI 显示 `已查 X/Y，会员 N 人`
+6. **流式实时结果**：Web UI 不等待全部 JARL 查询完成，每批（≤20 个）查完立刻把结果追加到表格里
+   - 实现：服务端 NDJSON 流（`event: start | result | done | error` 行），前端用 `fetch` + `ReadableStream` reader 解析并 append 行
+   - 显示 `已查 X/Y，会员 N 人` 的进度条；缓存命中的结果在 `start` 后立刻 flush，无需走 JARL
 7. **结果筛选/排序**：表格可按"仅会员"、"按 QTH"等过滤
 8. **CSV 导出**：列 = `callsign, is_jarl_member, qsl_via, raw_result, queried_at`
    - ⚠️ **JARL 不返回姓名 / QTH**（v0.1 技术验证已确认，原假设是错的）
@@ -63,6 +65,11 @@
    - `raw_result` ← 原始 JARL 字符串（`○ Yes` / `○ No` / `×` / 等），便于调试
    - **`unknown` 在 UI 里必须高亮**，提示用户去浏览器手动核对——不要把网络问题当成"非会员"
 9. **QRZ API key 隔离**：`.env` + `.gitignore` + 提交前自检脚本，**绝不进 git**
+10. **ADI 成员过滤导出**（输入是 ADI 时启用）：导出一份只包含会员 QSO 的 ADI 文件
+    - 保留原 QSO 的全部字段（QSO_DATE / TIME_ON / BAND / MODE / RST 等）
+    - 不修改、不添加字段；纯粹按 CALL 字段过滤，保留 ADI 头
+    - 只保留 `is_jarl_member == 'yes'` 的记录。`unknown` 不保留（避免污染），UI 文案要说明
+    - 按字节级保留原记录文本，不重新序列化——防止 ADIF 兼容性回退
 
 ### 3.2 验证标准（"完成"的定义）
 任何 release 必须通过：
@@ -77,7 +84,7 @@
 
 显式排除，避免范围蔓延。这些是好想法，但**不属于当前迭代**：
 
-- ❌ 写回 ADI 文件（给 QSO 加 `APP_JARL_MEMBER` 字段）
+- ❌ 给 ADI 的 QSO **添加新字段**（如 `APP_JARL_MEMBER`）——只允许"过滤", 不允许"标注"
 - ❌ 桌面 GUI（Tkinter/PyQt）
 - ❌ 浏览器扩展
 - ❌ 并发查询（与限速冲突，且对 JARL 不友好）
