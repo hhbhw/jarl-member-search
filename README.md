@@ -82,20 +82,33 @@ All settings live in `.env`:
 
 ### Getting a QRZ Logbook API key
 
-The Logbook API works on **free** QRZ accounts — you do **not** need a paid
-subscription. But the key isn't where most people expect:
+⚠️ **The QRZ Logbook API requires a paid QRZ XML Subscriber account**
+(~US$35/year). Free QRZ accounts can use the logbook in the browser but
+**cannot** call the HTTP API. If you see
+
+> `user does not have a valid QRZ subscription to use this function`
+
+that's the cause. The other two input modes — paste a callsign list, or
+upload an ADI file exported from your logger — work for everyone and need
+no subscription.
+
+If you do have an XML Subscriber account:
 
 1. The key is **per logbook**, not per account. Go to
-   <https://logbook.qrz.com>, open your logbook, click **Settings** → look for
-   "API key" / "Web Service API". That's the one to use here.
-2. The **logbook must have at least one QSO** in it. A brand-new empty
-   logbook makes the API return `RESULT=FAIL` and we can't tell that apart
-   from "no records in the date range" reliably.
-3. Some accounts have **HTTP API access disabled** by default. In the same
-   Settings page, enable "API access" / "Allow Logbook API".
+   <https://logbook.qrz.com>, open your logbook, click **Settings** →
+   look for "API key" / "Web Service API".
+2. The logbook must have at least one QSO in it.
 
-If the key is wrong, the UI will now show the literal QRZ response:
-`invalid api key XXXX-XXXX-XXXX-XXXX` or `STATUS: AUTH`.
+Errors from QRZ are surfaced verbatim in the UI — `invalid api key XXXX`,
+`STATUS: AUTH`, the subscription message above — so you can tell exactly
+which case you're hitting.
+
+### Working around the QRZ subscription requirement
+
+Every desktop / web logger can export ADI/ADIF: Cloudlog, Log4OM, N1MM,
+HRD, JTDX, WSJT-X, Ham Radio Deluxe, etc. Export your log, then drag the
+file into the "Or upload ADI/ADIF file" box. Same result, no subscription
+needed.
 
 ## Be kind to JARL
 

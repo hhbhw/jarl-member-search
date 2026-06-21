@@ -112,7 +112,23 @@
   let activeCtrl = null;
 
   function setEl(id, v) { document.getElementById(id).textContent = v; }
-  function showErr(msg) { errBox.textContent = msg; errBox.style.display = 'block'; }
+  function showErr(msg) {
+    errBox.innerHTML = '';
+    const p = document.createElement('p');
+    p.style.margin = '0';
+    p.textContent = msg;
+    errBox.appendChild(p);
+    if (/valid QRZ subscription/i.test(msg)) {
+      const hint = document.createElement('p');
+      hint.style.cssText = 'margin:6px 0 0; font-size:13px;';
+      hint.innerHTML = 'QRZ\'s HTTP Logbook API needs a paid XML Subscriber account (~US$35/yr). '
+        + 'Free accounts can\'t use it. <strong>Workaround:</strong> export your log to ADI from any logger '
+        + '(Cloudlog / Log4OM / N1MM / WSJT-X etc.) and use the "Upload ADI/ADIF file" box above — '
+        + 'same result, no subscription needed.';
+      errBox.appendChild(hint);
+    }
+    errBox.style.display = 'block';
+  }
   function clearErr() { errBox.style.display = 'none'; errBox.textContent = ''; }
 
   function reset() {
