@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <title>JARL Member Search</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", sans-serif; max-width: 880px; margin: 2em auto; padding: 0 1em; color: #222; }
+    h1 { font-size: 1.4em; }
+    textarea { width: 100%; min-height: 8em; font-family: monospace; font-size: 14px; padding: 8px; box-sizing: border-box; }
+    button { background: #2c7; color: white; border: 0; padding: 8px 16px; font-size: 14px; cursor: pointer; border-radius: 4px; }
+    button:hover { background: #1a6; }
+    table { width: 100%; border-collapse: collapse; margin-top: 1em; }
+    th, td { padding: 6px 10px; text-align: left; border-bottom: 1px solid #eee; font-size: 14px; }
+    th { background: #f4f4f4; }
+    .yes { color: #1a6; font-weight: bold; }
+    .no { color: #888; }
+    .unknown { color: #c60; background: #fff7e0; font-weight: bold; }
+    .summary { background: #f8f8f8; padding: 10px; border-radius: 4px; margin: 1em 0; font-size: 14px; }
+    .note { color: #666; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h1>JARL 会員検索 / Member Search</h1>
+  <p class="note">入力されたコールサインから日本局を判定し、JARL 公式検索に問い合わせます。1 回のリクエストで最大 20 局まとめて送信します。</p>
+
+  <form method="post" action="/search" enctype="multipart/form-data" id="searchForm">
+    <label for="callsigns">Callsigns (one per line or comma-separated)</label>
+    <textarea id="callsigns" name="callsigns" placeholder="JA1RL&#10;JE1ABC&#10;...">{{ submitted or "" }}</textarea>
+    <p>
+      <label for="adi_file">Or upload ADI/ADIF file:</label>
+      <input type="file" id="adi_file" name="adi_file" accept=".adi,.adif" />
+    </p>
+    <fieldset style="border:1px solid #ddd; padding:10px;">
+      <legend>Or pull from QRZ Logbook</legend>
+      <p>
+        <label for="qrz_key">QRZ API key:</label>
+        <input type="password" id="qrz_key" name="qrz_key" placeholder="leave blank to use .env" style="width:280px;" />
+      </p>
+      <p>
+        <label>Date range (optional):</label>
+        <input type="date" name="qrz_start" /> &mdash;
+        <input type="date" name="qrz_end" />
+      </p>
+    </fieldset>
+    <p>
+      <button type="submit">Search JARL</button>
+      <button type="submit" formaction="/export.csv">Download CSV</button>
+    </p>
+  </form>
+
+  {% if qrz_error %}
+    <p style="color:#c00; background:#fee; padding:8px; border-radius:4px;">{{ qrz_error }}</p>
+  {% endif %}
+
+  {% if summary %}
+    <div class="summary">
+      Input <strong>{{ summary.total_input }}</strong> &middot;
+      From cache <strong>{{ summary.from_cache }}</strong> &middot;
+      Hit JARL <strong>{{ summary.from_jarl }}</strong> &middot;
+      Skipped non-JP <strong>{{ summary.skipped }}</strong> &middot;
+      Members <strong class="yes">{{ summary.members }}</strong> &middot;
+      Non-members <strong>{{ summary.non_members }}</strong> &middot;
+      Unknown <strong class="unknown">{{ summary.unknown }}</strong>
+    </div>
+  {% endif %}
+
+  {% if skipped %}
+  <details>
+    <summary>Skipped (non-Japanese or malformed): {{ skipped|length }}</summary>
+    <table>
+      <thead><tr><th>Callsign</th><th>Reason</th></tr></thead>
+      <tbody>
+        {% for s in skipped %}
+        <tr><td><code>{{ s.original }}</code></td><td>{{ s.reason }}</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </details>
+  {% endif %}
+
+  {% if results %}
+  <div style="margin: 8px 0;">
+    Filter:
+    <button type="button" data-filter="all">All</button>
+    <button type="button" data-filter="yes">Members only</button>
+    <button type="button" data-filter="no">Non-members</button>
+    <button type="button" data-filter="unknown">Unknown only</button>
+  </div>
+  <table id="resultsTable">
+    <thead>
+      <tr>
+        <th data-sort="callsign" style="cursor:pointer;">Callsign ▲▼</th>
+        <th data-sort="is_member" style="cursor:pointer;">Member? ▲▼</th>
+        <th data-sort="qsl_via" style="cursor:pointer;">QSL via ▲▼</th>
+        <th>Raw</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in results %}
+      <tr data-status="{{ r.is_member }}">
+        <td><code>{{ r.callsign }}</code></td>
+        <td class="{{ r.is_member }}">{{ r.is_member }}</td>
+        <td>{{ r.qsl_via }}</td>
+        <td><small>{{ r.raw_result }}</small></td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <p class="note">⚠️ <code>unknown</code> means JARL did not return a parseable result — check manually at <a href="https://www.jarl.com/Page/Search/MemberSearch.aspx?Language=Jp" target="_blank">jarl.com</a>.</p>
+  <script>
+    (function() {
+      var table = document.getElementById('resultsTable');
+      var rows = Array.prototype.slice.call(table.tBodies[0].rows);
+
+      document.querySelectorAll('button[data-filter]').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+          var f = btn.getAttribute('data-filter');
+          rows.forEach(function(tr) {
+            tr.style.display = (f === 'all' || tr.dataset.status === f) ? '' : 'none';
+          });
+        });
+      });
+
+      var sortAsc = {};
+      table.querySelectorAll('th[data-sort]').forEach(function(th, colIdx) {
+        th.addEventListener('click', function() {
+          var key = th.getAttribute('data-sort');
+          sortAsc[key] = !sortAsc[key];
+          var dir = sortAsc[key] ? 1 : -1;
+          rows.sort(function(a, b) {
+            var av = a.cells[colIdx].innerText.trim();
+            var bv = b.cells[colIdx].innerText.trim();
+            return av < bv ? -dir : av > bv ? dir : 0;
+          });
+          var tb = table.tBodies[0];
+          rows.forEach(function(tr) { tb.appendChild(tr); });
+        });
+      });
+    })();
+  </script>
+  {% endif %}
+</body>
+</html>
