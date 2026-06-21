@@ -76,9 +76,26 @@ All settings live in `.env`:
 
 | Variable                  | Default | Meaning                                  |
 | ------------------------- | ------- | ---------------------------------------- |
-| `QRZ_API_KEY`             | _none_  | Get yours at <https://logbook.qrz.com/logbook?op=keys> |
+| `QRZ_API_KEY`             | _none_  | See "Getting a QRZ Logbook API key" below |
 | `JARL_RATE_LIMIT_SECONDS` | `1.0`   | Sleep between JARL batches (20 calls/batch) |
 | `CACHE_TTL_DAYS`          | `30`    | How long cached entries stay fresh        |
+
+### Getting a QRZ Logbook API key
+
+The Logbook API works on **free** QRZ accounts — you do **not** need a paid
+subscription. But the key isn't where most people expect:
+
+1. The key is **per logbook**, not per account. Go to
+   <https://logbook.qrz.com>, open your logbook, click **Settings** → look for
+   "API key" / "Web Service API". That's the one to use here.
+2. The **logbook must have at least one QSO** in it. A brand-new empty
+   logbook makes the API return `RESULT=FAIL` and we can't tell that apart
+   from "no records in the date range" reliably.
+3. Some accounts have **HTTP API access disabled** by default. In the same
+   Settings page, enable "API access" / "Allow Logbook API".
+
+If the key is wrong, the UI will now show the literal QRZ response:
+`invalid api key XXXX-XXXX-XXXX-XXXX` or `STATUS: AUTH`.
 
 ## Be kind to JARL
 

@@ -70,7 +70,12 @@ class QrzClient:
         r.raise_for_status()
         body = _parse_response(r.text)
         if body.get("RESULT") != "OK":
-            raise QrzApiError(f"QRZ STATUS failed: {body.get('REASON') or body.get('RESULT')}")
+            reason = (body.get("REASON") or "").strip() or body.get("RESULT", "unknown")
+            raise QrzApiError(
+                f"QRZ STATUS failed: {reason}. "
+                "Make sure the key comes from the logbook's Settings (not your account API key), "
+                "and that the logbook has at least one QSO and HTTP API enabled."
+            )
         return QrzStatus(
             callsign=body.get("CALLSIGN", ""),
             count=int(body.get("COUNT", "0") or 0),
@@ -104,13 +109,26 @@ class QrzClient:
             r = await c.post(QRZ_URL, data=data)
         r.raise_for_status()
         body = _parse_response(r.text)
-        # QRZ returns RESULT=FAIL with COUNT=0 when a filter matches no QSOs
-        # (e.g. a date range outside the logbook). Treat that as empty, not error.
         if body.get("RESULT") != "OK":
+            reason = (body.get("REASON") or "").strip()
             count = int(body.get("COUNT", "0") or 0)
-            if count == 0:
+            # If QRZ gave a REASON, surface it — could be auth, disabled API,
+            # malformed range, or anything else worth telling the user.
+            if reason:
+                raise QrzApiError(f"QRZ FETCH failed: {reason}")
+            # No REASON and zero count + we asked for a date range → likely
+            # a legitimately empty window. Treat as empty.
+            if count == 0 and opt:
                 return ""
-            raise QrzApiError(f"QRZ FETCH failed: {body.get('REASON') or body.get('RESULT')}")
+            # No REASON and zero count with NO filter → almost always means
+            # the logbook is empty or the key is invalid. Tell the user.
+            if count == 0:
+                raise QrzApiError(
+                    "QRZ returned 0 records with no filter. Either the logbook is empty, "
+                    "the API key is invalid, or Logbook API access is disabled for that account "
+                    "(check the logbook's Settings → API)."
+                )
+            raise QrzApiError(f"QRZ FETCH failed: {body.get('RESULT')}")
         adif_escaped = body.get("ADIF", "")
         # QRZ HTML-escapes the ADIF angle brackets (&lt;call:5&gt;).
         return html.unescape(adif_escaped)
